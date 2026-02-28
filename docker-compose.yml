@@ -1,0 +1,15 @@
+services:
+  drive-mcp:
+    build: .
+    volumes:
+      # Map the local token folder to the container's token folder to persist Google Drive auth
+      - drive-mcp-data:/root/.auto-drive-mcp
+    environment:
+      # These variables can be overridden or loaded from a .env file
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    stdin_open: true # stdio mode
+    tty: true
+
+volumes:
+  drive-mcp-data:

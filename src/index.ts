@@ -14,7 +14,7 @@ import * as os from "os";
 // Constants for OAuth
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
 // The user needs to provide a credentials.json or we can fall back to env vars if necessary
-const PORT = 3000;
+const PORT = 8080;
 
 // To store auth
 const APP_DATA_DIR = process.platform === "win32"
@@ -54,7 +54,9 @@ class DriveMCPServer {
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
     if (!clientId || !clientSecret) {
-      throw new Error("Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables.");
+      console.error("[Drive MCP] Warning: Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET.");
+      console.error("[Drive MCP] Starting in restricted mode. Authentication required for Drive access.");
+      return;
     }
 
     this.authClient = new google.auth.OAuth2(
@@ -83,7 +85,7 @@ class DriveMCPServer {
 
       const httpServer = http.createServer(async (req, res) => {
         try {
-          if (req.url?.startsWith("/?code=")) {
+          if (req.url && req.url.includes("code=")) {
             const qs = new url.URL(req.url, `http://localhost:${PORT}`).searchParams;
             const code = qs.get("code");
 
@@ -91,18 +93,25 @@ class DriveMCPServer {
               const { tokens } = await this.authClient.getToken(code);
               this.authClient.setCredentials(tokens);
               fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
-              
+
               res.writeHead(200, { "Content-Type": "text/html" });
               res.end("<h1>Authentication successful!</h1><p>You can close this tab and return to the terminal.</p>");
-              
+
               this.drive = google.drive({ version: "v3", auth: this.authClient });
               httpServer.close();
               resolve();
-            } else {
-              res.writeHead(400);
-              res.end("Authentication failed: No code found.");
-              reject(new Error("No code in callback"));
             }
+          } else if (req.url && req.url.includes("error=")) {
+            res.writeHead(400);
+            res.end("Authentication failed: Access Denied.");
+            reject(new Error("OAuth Error: " + req.url));
+          } else {
+            // Ignore other requests like /favicon.ico
+            if (req.url !== "/favicon.ico") {
+              console.error(`[Drive MCP] Ignoring non-callback request: ${req.url}`);
+            }
+            res.writeHead(404);
+            res.end("Not found");
           }
         } catch (e) {
           res.writeHead(500);
@@ -111,8 +120,8 @@ class DriveMCPServer {
         }
       });
 
-      httpServer.listen(PORT, () => {
-        console.error(`[Drive MCP] Local callback server listening on port ${PORT}`);
+      httpServer.listen(PORT, "127.0.0.1", () => {
+        console.error(`[Drive MCP] Local callback server listening on http://127.0.0.1:${PORT}`);
       });
     });
   }
@@ -152,16 +161,30 @@ class DriveMCPServer {
               required: ["fileId"],
             },
           },
+          {
+            name: "drive_ping",
+            description: "Ping the Drive MCP server to check if it's alive.",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      if (name === "drive_ping") {
+        return {
+          content: [{ type: "text", text: "Pong! Drive MCP Server is successfully connected and responding to Antigravity." }]
+        };
+      }
+
       if (!this.drive) {
         throw new Error("Google Drive API is not initialized. Please authenticate first.");
       }
-
-      const { name, arguments: args } = request.params;
 
       if (name === "drive_list_files") {
         const query = typeof args?.query === 'string' ? args.query : "";
